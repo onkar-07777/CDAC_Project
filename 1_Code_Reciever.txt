@@ -1,0 +1,78 @@
+#include <SPI.h>
+#include <mcp_can.h>
+#include <WiFi.h>
+#include <ThingSpeak.h>
+
+const int sensorPin = 34;  // Pin connected to the SW-420 vibration sensor
+
+MCP_CAN CAN(21); // Set CS pin for MCP2515
+unsigned int id = 0x100;
+
+#define WIFI_SSID "Redmi 10 Power"
+#define WIFI_PASSWORD "123456789"
+#define THINGSPEAK_API_KEY "0PO4D3KLU1WROQ35"
+#define THINGSPEAK_CHANNEL_ID 2442393
+
+WiFiClient client;
+
+int buttonPin = 2;
+int buttonState = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(sensorPin, INPUT);
+  pinMode(buttonPin, INPUT);// Set sensor pin as input
+  
+  // Initialize MCP2515 CAN controller
+  if (CAN.begin(MCP_ANY, CAN_500KBPS, MCP_16MHZ) == CAN_OK) {
+    Serial.println("MCP2515 Initialized Successfully!");
+  } else {
+    Serial.println("Error Initializing MCP2515...");
+  }
+  CAN.setMode(MCP_NORMAL);
+
+  // Connect to Wi-Fi
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("WiFi connected");
+
+  ThingSpeak.begin(client); // Initialize ThingSpeak
+}
+
+void loop() {
+  byte sensorValue = digitalRead(sensorPin);
+  buttonState = digitalRead(buttonPin);  // Read the sensor value
+ 
+  static byte res;
+  if (sensorValue == HIGH || buttonState == HIGH ) {
+    Serial.println("Vibration detected!");  // Print message when vibration is detected
+    res = CAN.sendMsgBuf(id, 0, 2, &sensorValue); // Send a CAN message with ID 0x100 and 8 bytes of data
+    
+    // Send sensor data to ThingSpeak
+    if (WiFi.status() == WL_CONNECTED) {
+      ThingSpeak.setField(1, sensorValue); // Assuming you want to send the sensor value to ThingSpeak
+      int httpCode = ThingSpeak.writeFields(THINGSPEAK_CHANNEL_ID, THINGSPEAK_API_KEY);
+      if (httpCode >= 200) {
+        Serial.println("Data Sent to ThingSpeak Successfully!");
+      } else {
+        Serial.print("Error Sending Data to ThingSpeak. HTTP error code: ");
+        Serial.println(httpCode);
+      }
+    } else {
+      Serial.println("WiFi Disconnected. Cannot send data to ThingSpeak.");
+    }
+  } 
+  delay(1000);
+  
+  if (res == CAN_OK) {
+    Serial.println("Message Sent Successfully!");
+  } else {
+    Serial.println("Error Sending Message...");
+  }
+  delay(100);
+}

@@ -1,0 +1,158 @@
+#include <mcp_can.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <TinyGPS++.h>
+#include <HardwareSerial.h>
+#include <WiFi.h>
+#include <ThingSpeak.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET    -1
+#define SCREEN_ADDRESS 0x3C
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+#define LED_PIN 13
+#define CAN_INT 2
+MCP_CAN CAN(5);  // Set CS pin for MCP2515
+
+#define TXD2 16
+#define RXD2 17
+HardwareSerial neogps(1);
+TinyGPSPlus gps;
+
+#define WIFI_SSID "Redmi 10 Power"
+#define WIFI_PASSWORD "123456789"
+#define THINGSPEAK_API_KEY "0PO4D3KLU1WROQ35"
+#define THINGSPEAK_CHANNEL_ID 2442393
+
+WiFiClient client;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  neogps.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  if(display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS))
+  {
+    Serial.println("welcome to the project");
+  } 
+else
+ {
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;);
+  }
+  display.clearDisplay();
+  display.display();
+
+  pinMode(CAN_INT, INPUT);
+
+  if (CAN.begin(MCP_ANY, CAN_500KBPS, MCP_16MHZ) == CAN_OK) {
+    Serial.println("MCP2515 Initialized Successfully!");
+  } else {
+    Serial.println("Error Initializing MCP2515...");
+  }
+  CAN.setMode(MCP_NORMAL);
+
+  // Connect to Wi-Fi
+  // Serial.println("Connecting to WiFi...");
+  // WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  // while (WiFi.status() != WL_CONNECTED) {
+  //   delay(500);
+  //   Serial.print(".");
+  // }
+  // Serial.println("");
+  // Serial.println("WiFi connected");
+
+  ThingSpeak.begin(client); // Initialize ThingSpeak
+}
+
+void loop() {
+  if (!digitalRead(CAN_INT)) {
+    long unsigned int id;
+    unsigned char len;
+    unsigned char buf[2];
+    CAN.readMsgBuf(&id, &len, buf);
+
+    Serial.print("ID: ");
+    Serial.print(id, HEX);
+    Serial.print(" Data: ");
+    for (int i = 0; i < len; i++) {
+      Serial.print(buf[i]);
+      Serial.print(" ");
+    }
+    Serial.println();
+
+    if (buf[0] >= 215) 
+    { // Check if received value is 215 or above
+      digitalWrite(LED_PIN, HIGH); // Turn on the LED
+      delay(3000); // Wait for 3 seconds
+      digitalWrite(LED_PIN, LOW); // Turn off the LED
+    }
+
+    if (buf[0] == HIGH) { // Assuming vibration data is sent as the first byte of the message
+      displayLocation();
+      sendToThingSpeak(gps.location.lat(), gps.location.lng());
+    }
+  }
+
+  boolean newData = false;
+  for (unsigned long start = millis(); millis() - start < 1000;) {
+    while (neogps.available()) {
+      if (gps.encode(neogps.read())) {
+        newData = true;
+      }
+    }
+  }
+
+  if (newData == true) {
+    displayLocation();
+    sendToThingSpeak(gps.location.lat(), gps.location.lng());
+    newData = false;
+  } else {
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.setTextSize(2);
+    display.print("No GPS Data");
+    display.display();
+  }
+}
+
+void displayLocation() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  if (gps.location.isValid() && gps.speed.isValid()) {
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.print("Lat: ");
+    display.println(gps.location.lat(), 6);
+    display.print("Lng: ");
+    display.println(gps.location.lng(), 6);
+    
+  } else {
+    display.setTextSize(2);
+    display.setCursor(0, 0);
+    display.print("No GPS Data");
+  }
+  display.display();
+}
+
+void sendToThingSpeak(float latitude, float longitude) {
+  // Update ThingSpeak fields
+  ThingSpeak.setField(1, latitude);
+  ThingSpeak.setField(2, longitude);
+  
+
+  // Write the fields to ThingSpeak
+  int status = ThingSpeak.writeFields(THINGSPEAK_CHANNEL_ID, THINGSPEAK_API_KEY);
+
+  if (status == 200) {
+    Serial.println("Message sent to ThingSpeak successfully!");
+  } else {
+    Serial.print("Error sending message to ThingSpeak, status code: ");
+    Serial.println(status);
+  }
+}
